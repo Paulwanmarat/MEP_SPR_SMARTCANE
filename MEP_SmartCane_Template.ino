@@ -4,43 +4,42 @@
 #include <TinyGPSPlus.h>
 #include <math.h>
 
-// Wifi and LINE 
+// Wifi and line
 const char* ssid = "";
 const char* password = "";
 
 String lineToken = "";
 String groupId   = "";
 
-// Pins 
+// set pins
 const int buttonPin = 34;
+const int buzzerPin = 4;
 const int trigPin = 5;
 const int echoPin = 18;
-const int buzzerPin = 4;
 
-// Button
+// Button settings
 bool lastButtonState = LOW;
 unsigned long lastButtonPress = 0;
 const unsigned long buttonDebounce = 50;
+const unsigned long buttonCooldown = 10000; // 10 seconds cooldown
 
-// Fall Detection 
+// Gyrosensor settings
 const int MPU_ADDR = 0x68;
 float accelThreshold = 1.5; // g
 unsigned long lastFallAlert = 0;
-const unsigned long fallDelay = 2000;
+const unsigned long fallCooldown = 10000; // 10 seconds cooldown
 
-// Obstacle Detection
-unsigned long lastObstacleAlert = 0;
-const unsigned long obstacleDelay = 1000;
-const int maxDistance = 150;  // cm
-
-// GPS 
+// GPS settings
 TinyGPSPlus gps;
-HardwareSerial gpsSerial(1); // UART1
+HardwareSerial gpsSerial(1);
+bool gpsFixed = false;     
 
-// Smart cane Functions
+// functions
 String escapeJson(String str) {
   str.replace("\\", "\\\\");
   str.replace("\"", "\\\"");
+  str.replace("\n", "\\n");
+  str.replace("\r", "");
   return str;
 }
 
@@ -53,22 +52,15 @@ void sendLineMessage(String message) {
   http.addHeader("Authorization", "Bearer " + lineToken);
 
   String payload = "{\"to\":\"" + groupId + "\",\"messages\":[{\"type\":\"text\",\"text\":\"" + escapeJson(message) + "\"}]}";
+  int code = http.POST(payload);
 
-  int code = 0;
-  int attempts = 0;
-  while (attempts < 3) {
-    code = http.POST(payload);
-    if (code == 200) break;
-    attempts++;
-    delay(2000);
-  }
-
-  if (code == 200) Serial.println("[LINE] Message sent successfully!");
-  else Serial.println("[LINE] Failed after retries. Code: " + String(code));
+  if (code == 200) Serial.println("[LINE] Message sent!");
+  else Serial.println("[LINE] Response code: " + String(code));
 
   http.end();
 }
 
+// Send a google map link to line
 void sendAlertWithGPS(String prefix) {
   String message;
   float lat, lng;
@@ -76,37 +68,22 @@ void sendAlertWithGPS(String prefix) {
   if (gps.location.isValid()) {
     lat = gps.location.lat();
     lng = gps.location.lng();
-    String link = "https://maps.google.com/?q=" + String(lat, 6) + "," + String(lng, 6);
-    message = prefix + "\nLocation: " + link;
+    message = prefix + "\nhttps://maps.google.com/?q=" + String(lat,6) + "," + String(lng,6);
   } else {
-    // Default Fallback coordinates
     lat = 13.7563;
     lng = 100.5018;
-    String link = "https://maps.google.com/?q=" + String(lat, 6) + "," + String(lng, 6);
-    message = prefix + "\nLocation: Not fixed, fallback: " + link;
+    message = prefix + "\nLocation not fixed. Fallback: https://maps.google.com/?q=" + String(lat,6) + "," + String(lng,6);
   }
 
   sendLineMessage(message);
 }
 
-// Non blocking buzzer
+// Buzzer
 void beepBuzzer(int freq, int duration) {
-  tone(buzzerPin, freq);
-  unsigned long start = millis();
-  while (millis() - start < duration) { }
-  noTone(buzzerPin);
+  tone(buzzerPin, freq, duration);
 }
 
-long readDistance() {
-  digitalWrite(trigPin, LOW);
-  delayMicroseconds(2);
-  digitalWrite(trigPin, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(trigPin, LOW);
-  long duration = pulseIn(echoPin, HIGH, 30000);
-  return duration * 0.0343 / 2;
-}
-
+// Gyrosensor
 void setupMPU() {
   Wire.begin(21, 22);
   Wire.beginTransmission(MPU_ADDR);
@@ -128,19 +105,30 @@ float readMPU() {
   float gX = AcX / 16384.0;
   float gY = AcY / 16384.0;
   float gZ = AcZ / 16384.0;
-  return sqrt(gX * gX + gY * gY + gZ * gZ);
+  return sqrt(gX*gX + gY*gY + gZ*gZ);
 }
 
-// Setup
+// Ultrasonic sensor
+float readUltrasonicCM() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  long duration = pulseIn(echoPin, HIGH, 30000); // timeout 30ms
+  float distanceCM = duration * 0.034 / 2.0;
+  return distanceCM;
+}
+
 void setup() {
   Serial.begin(115200);
-
   pinMode(buttonPin, INPUT);
+  pinMode(buzzerPin, OUTPUT);
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
-  pinMode(buzzerPin, OUTPUT);
 
   // Wifi
+  Serial.println("Connecting to WiFi...");
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -149,57 +137,66 @@ void setup() {
   Serial.println("\nWiFi connected: " + WiFi.localIP().toString());
   sendLineMessage("Smart Cane Online!");
 
+  // MPU
   setupMPU();
 
   // GPS
   gpsSerial.begin(9600, SERIAL_8N1, 16, 17);
 
-  // Print table header
-  Serial.println(F("--------------------------------------------------"));
-  Serial.println(F("| BUTTON | FALL | ACCEL (g) | OBSTACLE (cm) |"));
-  Serial.println(F("--------------------------------------------------"));
 }
 
 void loop() {
   unsigned long currentMillis = millis();
 
-  // GPS
-  if (gpsSerial.available() > 0) gps.encode(gpsSerial.read());
+  // GPS parsing
+  while (gpsSerial.available() > 0) gps.encode(gpsSerial.read());
 
-  // Button
+  if (gps.location.isValid() && !gpsFixed) {
+    gpsFixed = true;
+    Serial.println("| GPS FIXED!");
+    beepBuzzer(3000, 200);
+  }
+
+  if (gps.location.isValid()) {
+    Serial.print("Lat: "); Serial.print(gps.location.lat(), 6);
+    Serial.print(" | Lng: "); Serial.print(gps.location.lng(), 6);
+    Serial.print(" | Sats: "); Serial.println(gps.satellites.value());
+  }
+
+  // Button press
   bool reading = digitalRead(buttonPin);
   if (reading == HIGH && lastButtonState == LOW && (currentMillis - lastButtonPress > buttonDebounce)) {
-    lastButtonPress = currentMillis;
-    Serial.print("|  PRESSED  ");
-    beepBuzzer(2500, 150);
-    sendAlertWithGPS("Emergency Button Pressed!");
-  } else if (reading == LOW) {
-    Serial.print("|    -     ");
+    if (currentMillis - lastButtonPress > buttonCooldown) {
+      Serial.println("| BUTTON PRESSED");
+      beepBuzzer(2500, 150);
+      sendAlertWithGPS("Emergency Button Pressed!");
+      lastButtonPress = currentMillis;
+    } else {
+      Serial.println("[BUTTON] Press ignored due to cooldown.");
+    }
   }
   lastButtonState = reading;
 
-  // Fall Detection
+  // Fall detection
   float totalG = readMPU();
-  if (totalG > accelThreshold && (currentMillis - lastFallAlert > fallDelay)) {
-    lastFallAlert = currentMillis;
-    Serial.print("| FALL!  ");
-    beepBuzzer(1500, 300);
-    sendAlertWithGPS("Fall detected! G=" + String(totalG));
-  } else {
-    Serial.print("|   -   ");
-  }
-  Serial.print("| " + String(totalG, 2) + "    ");
-
-  // Obstacle Detection
-  long dist = readDistance();
-  if (dist <= maxDistance) {
-    lastObstacleAlert = currentMillis;
-    Serial.print("| " + String(dist) + "       |");
-    if (dist <= 150) beepBuzzer(1000, 200);
-  } else {
-    Serial.print("|   -      |");
+  if (totalG > accelThreshold) {
+    if (currentMillis - lastFallAlert > fallCooldown) {
+      lastFallAlert = currentMillis;
+      Serial.println("| FALL DETECTED! G=" + String(totalG,2));
+      beepBuzzer(1500, 300);
+      sendAlertWithGPS("Fall Detected! G=" + String(totalG,2));
+    } else {
+      Serial.println("[FALL] Ignored due to cooldown. G=" + String(totalG,2));
+    }
   }
 
-  Serial.println();
+  // Ultrasonic distance
+  float distanceCM = readUltrasonicCM();
+  Serial.print("Distance: "); Serial.print(distanceCM); Serial.println(" cm");
+  if (distanceCM > 0 && distanceCM <= 150.0) {
+    beepBuzzer(2000, 200);
+    Serial.println("[ULTRASONIC] Object detected within 150cm!");
+  }
+
   delay(200);
 }
