@@ -11,7 +11,7 @@ const char* password = "";
 String lineToken = "";
 String groupId   = "";
 
-// set pins
+// Pins
 const int buttonPin = 34;
 const int buzzerPin = 4;
 const int trigPin = 5;
@@ -23,7 +23,7 @@ unsigned long lastButtonPress = 0;
 const unsigned long buttonDebounce = 50;
 const unsigned long buttonCooldown = 10000; // 10 seconds cooldown
 
-// Gyrosensor settings
+// MPU6050 Settings
 const int MPU_ADDR = 0x68;
 float accelThreshold = 1.5; // g
 unsigned long lastFallAlert = 0;
@@ -34,7 +34,13 @@ TinyGPSPlus gps;
 HardwareSerial gpsSerial(1);
 bool gpsFixed = false;     
 
-// functions
+// Ultrasonic beep timers
+unsigned long lastBeepLevel1 = 0;
+unsigned long lastBeepLevel2 = 0;
+unsigned long lastBeepLevel3 = 0;
+unsigned long lastBeepLevel4 = 0;
+
+// Functions
 String escapeJson(String str) {
   str.replace("\\", "\\\\");
   str.replace("\"", "\\\"");
@@ -60,7 +66,7 @@ void sendLineMessage(String message) {
   http.end();
 }
 
-// Send a google map link to line
+// Send alert with GPS link
 void sendAlertWithGPS(String prefix) {
   String message;
   float lat, lng;
@@ -83,7 +89,7 @@ void beepBuzzer(int freq, int duration) {
   tone(buzzerPin, freq, duration);
 }
 
-// Gyrosensor
+// MPU setup
 void setupMPU() {
   Wire.begin(21, 22);
   Wire.beginTransmission(MPU_ADDR);
@@ -92,6 +98,7 @@ void setupMPU() {
   Wire.endTransmission(true);
 }
 
+// Read MPU acceleration
 float readMPU() {
   int16_t AcX, AcY, AcZ;
   Wire.beginTransmission(MPU_ADDR);
@@ -108,7 +115,7 @@ float readMPU() {
   return sqrt(gX*gX + gY*gY + gZ*gZ);
 }
 
-// Ultrasonic sensor
+// Ultrasonic distance
 float readUltrasonicCM() {
   digitalWrite(trigPin, LOW);
   delayMicroseconds(2);
@@ -128,7 +135,7 @@ void setup() {
   pinMode(echoPin, INPUT);
 
   // Wifi
-  Serial.println("Connecting to WiFi...");
+  Serial.println("Connecting to WiFi");
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -142,7 +149,6 @@ void setup() {
 
   // GPS
   gpsSerial.begin(9600, SERIAL_8N1, 16, 17);
-
 }
 
 void loop() {
@@ -153,14 +159,14 @@ void loop() {
 
   if (gps.location.isValid() && !gpsFixed) {
     gpsFixed = true;
-    Serial.println("| GPS FIXED!");
+    Serial.println("GPS FIXED!");
     beepBuzzer(3000, 200);
   }
 
   if (gps.location.isValid()) {
     Serial.print("Lat: "); Serial.print(gps.location.lat(), 6);
-    Serial.print(" | Lng: "); Serial.print(gps.location.lng(), 6);
-    Serial.print(" | Sats: "); Serial.println(gps.satellites.value());
+    Serial.print("Lng: "); Serial.print(gps.location.lng(), 6);
+    Serial.print("Sats: "); Serial.println(gps.satellites.value());
   }
 
   // Button press
@@ -172,7 +178,7 @@ void loop() {
       sendAlertWithGPS("Emergency Button Pressed!");
       lastButtonPress = currentMillis;
     } else {
-      Serial.println("[BUTTON] Press ignored due to cooldown.");
+      Serial.println("Press ignored due to cooldown.");
     }
   }
   lastButtonState = reading;
@@ -186,16 +192,38 @@ void loop() {
       beepBuzzer(1500, 300);
       sendAlertWithGPS("Fall Detected! G=" + String(totalG,2));
     } else {
-      Serial.println("[FALL] Ignored due to cooldown. G=" + String(totalG,2));
+      Serial.println("FALL Ignored due to cooldown. G=" + String(totalG,2));
     }
   }
 
-  // Ultrasonic distance
+  // 4 Levels
   float distanceCM = readUltrasonicCM();
   Serial.print("Distance: "); Serial.print(distanceCM); Serial.println(" cm");
-  if (distanceCM > 0 && distanceCM <= 150.0) {
-    beepBuzzer(2000, 200);
-    Serial.println("[ULTRASONIC] Object detected within 150cm!");
+
+  if (distanceCM >= 55 && distanceCM <= 75) {
+    if (currentMillis - lastBeepLevel1 >= 5000) {
+      beepBuzzer(2000, 200);
+      lastBeepLevel1 = currentMillis;
+      Serial.println("Level 1");
+    }
+  } else if (distanceCM >= 40 && distanceCM <= 54) { 
+    if (currentMillis - lastBeepLevel2 >= 3000) {
+      beepBuzzer(2000, 200);
+      lastBeepLevel2 = currentMillis;
+      Serial.println("Level 2");
+    }
+  } else if (distanceCM >= 25 && distanceCM <= 39) { 
+    if (currentMillis - lastBeepLevel3 >= 2000) {
+      beepBuzzer(2000, 200);
+      lastBeepLevel3 = currentMillis;
+      Serial.println("Level 3");
+    }
+  } else if (distanceCM < 25 && distanceCM > 0) { 
+    if (currentMillis - lastBeepLevel4 >= 1000) {
+      beepBuzzer(2000, 200);
+      lastBeepLevel4 = currentMillis;
+      Serial.println("Level 4");
+    }
   }
 
   delay(200);
