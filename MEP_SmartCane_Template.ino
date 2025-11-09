@@ -39,6 +39,9 @@ unsigned long lastBeepLevel1 = 0;
 unsigned long lastBeepLevel2 = 0;
 unsigned long lastBeepLevel3 = 0;
 unsigned long lastBeepLevel4 = 0;
+const unsigned long distanceInterval = 500;
+unsigned long lastDistanceCheck = 0;
+unsigned long lastOutOfRangeBeep = 0;
 
 // Functions
 String escapeJson(String str) {
@@ -58,11 +61,7 @@ void sendLineMessage(String message) {
   http.addHeader("Authorization", "Bearer " + lineToken);
 
   String payload = "{\"to\":\"" + groupId + "\",\"messages\":[{\"type\":\"text\",\"text\":\"" + escapeJson(message) + "\"}]}";
-  int code = http.POST(payload);
-
-  if (code == 200) Serial.println("[LINE] Message sent!");
-  else Serial.println("[LINE] Response code: " + String(code));
-
+  http.POST(payload);
   http.end();
 }
 
@@ -76,9 +75,7 @@ void sendAlertWithGPS(String prefix) {
     lng = gps.location.lng();
     message = prefix + "\nhttps://maps.google.com/?q=" + String(lat,6) + "," + String(lng,6);
   } else {
-    lat = 13.7563;
-    lng = 100.5018;
-    message = prefix + "\nLocation not fixed. Fallback: https://maps.google.com/?q=" + String(lat,6) + "," + String(lng,6);
+    message = prefix + "\nLocation not available (GPS not fixed yet)";
   }
 
   sendLineMessage(message);
@@ -135,13 +132,10 @@ void setup() {
   pinMode(echoPin, INPUT);
 
   // Wifi
-  Serial.println("Connecting to WiFi");
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
-    Serial.print(".");
   }
-  Serial.println("\nWiFi connected: " + WiFi.localIP().toString());
   sendLineMessage("Smart Cane Online!");
 
   // MPU
@@ -159,26 +153,16 @@ void loop() {
 
   if (gps.location.isValid() && !gpsFixed) {
     gpsFixed = true;
-    Serial.println("GPS FIXED!");
     beepBuzzer(3000, 200);
-  }
-
-  if (gps.location.isValid()) {
-    Serial.print("Lat: "); Serial.print(gps.location.lat(), 6);
-    Serial.print("Lng: "); Serial.print(gps.location.lng(), 6);
-    Serial.print("Sats: "); Serial.println(gps.satellites.value());
   }
 
   // Button press
   bool reading = digitalRead(buttonPin);
   if (reading == HIGH && lastButtonState == LOW && (currentMillis - lastButtonPress > buttonDebounce)) {
     if (currentMillis - lastButtonPress > buttonCooldown) {
-      Serial.println("| BUTTON PRESSED");
       beepBuzzer(2500, 150);
       sendAlertWithGPS("Emergency Button Pressed!");
       lastButtonPress = currentMillis;
-    } else {
-      Serial.println("Press ignored due to cooldown.");
     }
   }
   lastButtonState = reading;
@@ -188,41 +172,51 @@ void loop() {
   if (totalG > accelThreshold) {
     if (currentMillis - lastFallAlert > fallCooldown) {
       lastFallAlert = currentMillis;
-      Serial.println("| FALL DETECTED! G=" + String(totalG,2));
       beepBuzzer(1500, 300);
       sendAlertWithGPS("Fall Detected! G=" + String(totalG,2));
-    } else {
-      Serial.println("FALL Ignored due to cooldown. G=" + String(totalG,2));
     }
   }
 
-  // 4 Levels
-  float distanceCM = readUltrasonicCM();
-  Serial.print("Distance: "); Serial.print(distanceCM); Serial.println(" cm");
+  // Ultrasonic distance check
+  if (millis() - lastDistanceCheck >= distanceInterval) {
+    lastDistanceCheck = millis();
+    float distanceCM = readUltrasonicCM();
 
-  if (distanceCM >= 55 && distanceCM <= 75) {
-    if (currentMillis - lastBeepLevel1 >= 5000) {
-      beepBuzzer(2000, 200);
-      lastBeepLevel1 = currentMillis;
-      Serial.println("Level 1");
+    // Out of range
+    if (distanceCM <= 0 || distanceCM > 400 || isnan(distanceCM)) {
+        if (millis() - lastOutOfRangeBeep >= 500) {
+            beepBuzzer(2000, 100);
+            lastOutOfRangeBeep = millis();
+        }
     }
-  } else if (distanceCM >= 40 && distanceCM <= 54) { 
-    if (currentMillis - lastBeepLevel2 >= 3000) {
-      beepBuzzer(2000, 200);
-      lastBeepLevel2 = currentMillis;
-      Serial.println("Level 2");
+
+    else if (distanceCM < 25) {
+        if (millis() - lastBeepLevel4 >= 1000) {
+            beepBuzzer(3000, 100);
+            lastBeepLevel4 = millis();
+            lastBeepLevel1 = lastBeepLevel2 = lastBeepLevel3 = millis();
+        }
     }
-  } else if (distanceCM >= 25 && distanceCM <= 39) { 
-    if (currentMillis - lastBeepLevel3 >= 2000) {
-      beepBuzzer(2000, 200);
-      lastBeepLevel3 = currentMillis;
-      Serial.println("Level 3");
+    else if (distanceCM >= 25 && distanceCM < 32) {
+        if (millis() - lastBeepLevel3 >= 2000) {
+            beepBuzzer(2500, 100);
+            lastBeepLevel3 = millis();
+            lastBeepLevel1 = lastBeepLevel2 = lastBeepLevel4 = millis();
+        }
     }
-  } else if (distanceCM < 25 && distanceCM > 0) { 
-    if (currentMillis - lastBeepLevel4 >= 1000) {
-      beepBuzzer(2000, 200);
-      lastBeepLevel4 = currentMillis;
-      Serial.println("Level 4");
+    else if (distanceCM >= 32 && distanceCM < 38) {
+        if (millis() - lastBeepLevel2 >= 3000) {
+            beepBuzzer(2000, 100);
+            lastBeepLevel2 = millis();
+            lastBeepLevel1 = lastBeepLevel3 = lastBeepLevel4 = millis();
+        }
+    }
+    else if (distanceCM > 53) {
+        if (millis() - lastBeepLevel1 >= 5000) {
+            beepBuzzer(1500, 100);
+            lastBeepLevel1 = millis();
+            lastBeepLevel2 = lastBeepLevel3 = lastBeepLevel4 = millis();
+        }
     }
   }
 
