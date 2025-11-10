@@ -173,7 +173,7 @@ void loop() {
     if (currentMillis - lastFallAlert > fallCooldown) {
       lastFallAlert = currentMillis;
       beepBuzzer(1500, 300);
-      sendAlertWithGPS("Fall Detected! G=" + String(totalG,2));
+      sendAlertWithGPS("Fall Detected!");
     }
   }
 
