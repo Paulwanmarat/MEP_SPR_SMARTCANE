@@ -173,7 +173,7 @@ void loop() {
     if (currentMillis - lastFallAlert > fallCooldown) {
       lastFallAlert = currentMillis;
       beepBuzzer(1500, 300);
-      sendAlertWithGPS("Fall Detected!");
+      sendAlertWithGPS("Fall Detected! G=" + String(totalG,2));
     }
   }
 
@@ -197,21 +197,21 @@ void loop() {
             lastBeepLevel1 = lastBeepLevel2 = lastBeepLevel3 = millis();
         }
     }
-    else if (distanceCM >= 25 && distanceCM < 32) {
+    else if (distanceCM >= 25 && distanceCM < 28) {
         if (millis() - lastBeepLevel3 >= 2000) {
             beepBuzzer(2500, 100);
             lastBeepLevel3 = millis();
             lastBeepLevel1 = lastBeepLevel2 = lastBeepLevel4 = millis();
         }
     }
-    else if (distanceCM >= 32 && distanceCM < 38) {
+    else if (distanceCM >= 28 && distanceCM < 30) {
         if (millis() - lastBeepLevel2 >= 3000) {
             beepBuzzer(2000, 100);
             lastBeepLevel2 = millis();
             lastBeepLevel1 = lastBeepLevel3 = lastBeepLevel4 = millis();
         }
     }
-    else if (distanceCM > 53) {
+    else if (distanceCM > 60) {
         if (millis() - lastBeepLevel1 >= 5000) {
             beepBuzzer(1500, 100);
             lastBeepLevel1 = millis();
