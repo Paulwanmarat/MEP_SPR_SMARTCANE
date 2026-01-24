@@ -4,7 +4,7 @@
 #include <TinyGPSPlus.h>
 #include <math.h>
 
-// Wifi and line
+// Wifi and Line
 const char* ssid = "";
 const char* password = "";
 
@@ -17,33 +17,39 @@ const int buzzerPin = 4;
 const int trigPin = 5;
 const int echoPin = 18;
 
-// Button settings
+// Button variable
 bool lastButtonState = LOW;
 unsigned long lastButtonPress = 0;
 const unsigned long buttonDebounce = 50;
-const unsigned long buttonCooldown = 10000; // 10 seconds cooldown
+const unsigned long buttonCooldown = 10000;
 
-// MPU6050 Settings
+// MPU6050 variables
 const int MPU_ADDR = 0x68;
-float accelThreshold = 1.5; // g
+float accelThreshold = 1.5;
 unsigned long lastFallAlert = 0;
-const unsigned long fallCooldown = 10000; // 10 seconds cooldown
+const unsigned long fallCooldown = 10000;
 
-// GPS settings
+// GPS
 TinyGPSPlus gps;
 HardwareSerial gpsSerial(1);
-bool gpsFixed = false;     
+bool gpsFixed = false;
 
-// Ultrasonic beep timers
+// Ultrasonic variables
 unsigned long lastBeepLevel1 = 0;
 unsigned long lastBeepLevel2 = 0;
 unsigned long lastBeepLevel3 = 0;
 unsigned long lastBeepLevel4 = 0;
-const unsigned long distanceInterval = 500;
 unsigned long lastDistanceCheck = 0;
 unsigned long lastOutOfRangeBeep = 0;
+const unsigned long distanceInterval = 500;
 
-// Functions
+// Offline buffer
+#define MAX_OFFLINE_MSG 10
+String offlineMessages[MAX_OFFLINE_MSG];
+int offlineCount = 0;
+bool wasOffline = true;
+
+// Util
 String escapeJson(String str) {
   str.replace("\\", "\\\\");
   str.replace("\"", "\\\"");
@@ -52,6 +58,7 @@ String escapeJson(String str) {
   return str;
 }
 
+// Line
 void sendLineMessage(String message) {
   if (WiFi.status() != WL_CONNECTED) return;
 
@@ -60,33 +67,55 @@ void sendLineMessage(String message) {
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Authorization", "Bearer " + lineToken);
 
-  String payload = "{\"to\":\"" + groupId + "\",\"messages\":[{\"type\":\"text\",\"text\":\"" + escapeJson(message) + "\"}]}";
+  String payload =
+    "{\"to\":\"" + groupId +
+    "\",\"messages\":[{\"type\":\"text\",\"text\":\"" +
+    escapeJson(message) + "\"}]}";
+
   http.POST(payload);
   http.end();
 }
 
-// Send alert with GPS link
-void sendAlertWithGPS(String prefix) {
-  String message;
-  float lat, lng;
-
-  if (gps.location.isValid()) {
-    lat = gps.location.lat();
-    lng = gps.location.lng();
-    message = prefix + "\nhttps://maps.google.com/?q=" + String(lat,6) + "," + String(lng,6);
+void sendLineMessageSafe(String message) {
+  if (WiFi.status() == WL_CONNECTED) {
+    sendLineMessage(message);
   } else {
-    message = prefix + "\nLocation not available (GPS not fixed yet)";
+    if (offlineCount < MAX_OFFLINE_MSG) {
+      offlineMessages[offlineCount++] = message;
+    }
   }
-
-  sendLineMessage(message);
 }
 
-// Buzzer
+void flushOfflineMessages() {
+  if (WiFi.status() == WL_CONNECTED && offlineCount > 0) {
+    sendLineMessage("Back Online – sending stored alerts");
+    for (int i = 0; i < offlineCount; i++) {
+      sendLineMessage(offlineMessages[i]);
+      delay(300);
+    }
+    offlineCount = 0;
+  }
+}
+
+// Alert with GPS
+void sendAlertWithGPS(String prefix) {
+  String message;
+  if (gps.location.isValid()) {
+    message = prefix + "\nhttps://maps.google.com/?q=" +
+              String(gps.location.lat(), 6) + "," +
+              String(gps.location.lng(), 6);
+  } else {
+    message = prefix + "\nLocation not available";
+  }
+  sendLineMessageSafe(message);
+}
+
+// Buzzer Settings
 void beepBuzzer(int freq, int duration) {
   tone(buzzerPin, freq, duration);
 }
 
-// MPU setup
+// MPU6050 Settings
 void setupMPU() {
   Wire.begin(21, 22);
   Wire.beginTransmission(MPU_ADDR);
@@ -95,13 +124,13 @@ void setupMPU() {
   Wire.endTransmission(true);
 }
 
-// Read MPU acceleration
 float readMPU() {
   int16_t AcX, AcY, AcZ;
   Wire.beginTransmission(MPU_ADDR);
   Wire.write(0x3B);
   Wire.endTransmission(false);
   Wire.requestFrom(MPU_ADDR, 6, true);
+
   AcX = Wire.read() << 8 | Wire.read();
   AcY = Wire.read() << 8 | Wire.read();
   AcZ = Wire.read() << 8 | Wire.read();
@@ -109,114 +138,118 @@ float readMPU() {
   float gX = AcX / 16384.0;
   float gY = AcY / 16384.0;
   float gZ = AcZ / 16384.0;
-  return sqrt(gX*gX + gY*gY + gZ*gZ);
+  return sqrt(gX * gX + gY * gY + gZ * gZ);
 }
 
-// Ultrasonic distance
+// Ultrasonic Settings
 float readUltrasonicCM() {
   digitalWrite(trigPin, LOW);
   delayMicroseconds(2);
   digitalWrite(trigPin, HIGH);
   delayMicroseconds(10);
   digitalWrite(trigPin, LOW);
-  long duration = pulseIn(echoPin, HIGH, 30000); // timeout 30ms
-  float distanceCM = duration * 0.034 / 2.0;
-  return distanceCM;
+  long duration = pulseIn(echoPin, HIGH, 30000);
+  return duration * 0.034 / 2.0;
 }
 
+// Setup
 void setup() {
   Serial.begin(115200);
+
   pinMode(buttonPin, INPUT);
   pinMode(buzzerPin, OUTPUT);
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
 
-  // Wifi
+  // Start wifi but no need to wait
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-  }
-  sendLineMessage("Smart Cane Online!");
 
-  // MPU
   setupMPU();
-
-  // GPS
   gpsSerial.begin(9600, SERIAL_8N1, 16, 17);
+
+  // Power on beep
+  beepBuzzer(2000, 200);
 }
 
+// Loop
 void loop() {
   unsigned long currentMillis = millis();
 
-  // GPS parsing
-  while (gpsSerial.available() > 0) gps.encode(gpsSerial.read());
+  // Wifi Connect
+  static unsigned long lastWifiAttempt = 0;
+  if (WiFi.status() != WL_CONNECTED) {
+    if (millis() - lastWifiAttempt > 5000) {
+      WiFi.begin(ssid, password);
+      lastWifiAttempt = millis();
+    }
+  }
 
+  // Wifi state change
+  if (WiFi.status() == WL_CONNECTED) {
+    if (wasOffline) {
+      sendLineMessage("Smart Cane Online!");
+      flushOfflineMessages();
+      wasOffline = false;
+    }
+  } else {
+    wasOffline = true;
+  }
+
+  // GPS
+  while (gpsSerial.available()) gps.encode(gpsSerial.read());
   if (gps.location.isValid() && !gpsFixed) {
     gpsFixed = true;
     beepBuzzer(3000, 200);
   }
 
-  // Button press
+  // Button
   bool reading = digitalRead(buttonPin);
-  if (reading == HIGH && lastButtonState == LOW && (currentMillis - lastButtonPress > buttonDebounce)) {
-    if (currentMillis - lastButtonPress > buttonCooldown) {
-      beepBuzzer(2500, 150);
-      sendAlertWithGPS("Emergency Button Pressed!");
-      lastButtonPress = currentMillis;
-    }
+  if (reading == HIGH && lastButtonState == LOW &&
+      (currentMillis - lastButtonPress > buttonDebounce) &&
+      (currentMillis - lastButtonPress > buttonCooldown)) {
+
+    beepBuzzer(2500, 150);
+    sendAlertWithGPS("Emergency Button Pressed!");
+    lastButtonPress = currentMillis;
   }
   lastButtonState = reading;
 
   // Fall detection
   float totalG = readMPU();
-  if (totalG > accelThreshold) {
-    if (currentMillis - lastFallAlert > fallCooldown) {
-      lastFallAlert = currentMillis;
-      beepBuzzer(1500, 300);
-      sendAlertWithGPS("Fall Detected! G=" + String(totalG,2));
-    }
+  if (totalG > accelThreshold &&
+      currentMillis - lastFallAlert > fallCooldown) {
+
+    lastFallAlert = currentMillis;
+    beepBuzzer(1500, 300);
+    sendAlertWithGPS("Fall Detected! G=" + String(totalG, 2));
   }
 
-  // Ultrasonic distance check
+  // Obstacle Detection
   if (millis() - lastDistanceCheck >= distanceInterval) {
     lastDistanceCheck = millis();
     float distanceCM = readUltrasonicCM();
 
-    // Out of range
     if (distanceCM <= 0 || distanceCM > 400 || isnan(distanceCM)) {
-        if (millis() - lastOutOfRangeBeep >= 500) {
-            beepBuzzer(2000, 100);
-            lastOutOfRangeBeep = millis();
-        }
+      if (millis() - lastOutOfRangeBeep > 500) {
+        beepBuzzer(2000, 100);
+        lastOutOfRangeBeep = millis();
+      }
     }
-
-    else if (distanceCM < 25) {
-        if (millis() - lastBeepLevel4 >= 1000) {
-            beepBuzzer(3000, 100);
-            lastBeepLevel4 = millis();
-            lastBeepLevel1 = lastBeepLevel2 = lastBeepLevel3 = millis();
-        }
+    else if (distanceCM < 25 && millis() - lastBeepLevel4 > 1000) {
+      beepBuzzer(3000, 100);
+      lastBeepLevel4 = millis();
     }
-    else if (distanceCM >= 25 && distanceCM < 28) {
-        if (millis() - lastBeepLevel3 >= 2000) {
-            beepBuzzer(2500, 100);
-            lastBeepLevel3 = millis();
-            lastBeepLevel1 = lastBeepLevel2 = lastBeepLevel4 = millis();
-        }
+    else if (distanceCM < 30 && millis() - lastBeepLevel3 > 2000) {
+      beepBuzzer(2500, 100);
+      lastBeepLevel3 = millis();
     }
-    else if (distanceCM >= 28 && distanceCM < 30) {
-        if (millis() - lastBeepLevel2 >= 3000) {
-            beepBuzzer(2000, 100);
-            lastBeepLevel2 = millis();
-            lastBeepLevel1 = lastBeepLevel3 = lastBeepLevel4 = millis();
-        }
+    else if (distanceCM < 60 && millis() - lastBeepLevel2 > 3000) {
+      beepBuzzer(2000, 100);
+      lastBeepLevel2 = millis();
     }
-    else if (distanceCM > 60) {
-        if (millis() - lastBeepLevel1 >= 5000) {
-            beepBuzzer(1500, 100);
-            lastBeepLevel1 = millis();
-            lastBeepLevel2 = lastBeepLevel3 = lastBeepLevel4 = millis();
-        }
+    else if (millis() - lastBeepLevel1 > 5000) {
+      beepBuzzer(1500, 100);
+      lastBeepLevel1 = millis();
     }
   }
 
