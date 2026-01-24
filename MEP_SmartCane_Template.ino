@@ -243,9 +243,7 @@ void loop() {
       beepBuzzer(2500, 100);
       lastBeepLevel3 = millis();
     }
-    else if (distanceCM < 60 && millis() - lastBeepLevel2 > 3000) {
-      beepBuzzer(2000, 100);
-      lastBeepLevel2 = millis();
+    else if (distanceCM < 60){
     }
     else if (millis() - lastBeepLevel1 > 5000) {
       beepBuzzer(1500, 100);
