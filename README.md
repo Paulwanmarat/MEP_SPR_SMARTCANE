@@ -1,8 +1,6 @@
-# MEP_SmartCane_Template.ino
-
 ## Project Overview
 
-This project is a Mini English Program (MEP) for senior high school students. The purpose of this project is to create a smart walking cane using an ESP32 microcontroller. The smart cane is designed to help elderly or visually impaired people by improving safety while walking.
+This project is for senior high school students. The purpose of this project is to create a smart walking cane using an ESP32 microcontroller. The smart cane is designed to help elderly or visually impaired people by improving safety while walking.
 
 The system can detect obstacles in front of the user, detect when a fall occurs, and send emergency alert messages with GPS location to caregivers using the LINE application.
 
